@@ -12,7 +12,11 @@ async function fetchFundData(code) {
     let gzData = {};
     try {
         const gzUrl = `https://fundgz.1234567.com.cn/js/${code}.js?rt=${Date.now()}`;
-        const response = await fetch(gzUrl, { headers });
+        // Set a 5s timeout using AbortController (Node.js 16.14+ compatible without AbortSignal.timeout)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(gzUrl, { headers, signal: controller.signal });
+        clearTimeout(timeoutId);
         const gzText = await response.text();
         if (gzText.includes('jsonpgz(')) {
             const match = gzText.match(/jsonpgz\((.*)\)/);
@@ -25,7 +29,13 @@ async function fetchFundData(code) {
     let tData = {};
     try {
         const tUrl = `https://qt.gtimg.cn/q=jj${code}`;
-        const response = await fetch(tUrl, { headers: { ...headers, 'Referer': 'https://gu.qq.com/' } });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        const response = await fetch(tUrl, {
+            headers: { ...headers, 'Referer': 'https://gu.qq.com/' },
+            signal: controller.signal
+        });
+        clearTimeout(timeoutId);
         const tText = await response.text();
         const tMatch = tText.match(/v_jj\d+="(.*)"/);
         if (tMatch && tMatch[1]) {
@@ -109,7 +119,7 @@ async function main() {
     }
 
     if (!codesStr) {
-        const filePath = path.join(__dirname, '../app/data/my-funds.json');
+        const filePath = path.join(__dirname, '../public/my-funds.json');
         if (fs.existsSync(filePath)) {
             codesStr = JSON.parse(fs.readFileSync(filePath, 'utf8')).join(',');
         }
