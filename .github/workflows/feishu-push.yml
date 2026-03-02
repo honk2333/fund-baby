@@ -12,24 +12,16 @@ jobs:
   push:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Trigger Feishu Push
+        env:
+          FEISHU_HOOK_URL: ${{ secrets.FEISHU_HOOK_URL }}
+          FUND_CODES: ${{ secrets.FUND_CODES }}
+          PUSH_TITLE: "养基小宝 - 定时推送"
         run: |
-          # 请在 GitHub Repo Settings -> Secrets and variables -> Actions 中配置以下变量:
-          # FEISHU_HOOK_URL: 您的飞书 Webhook 地址
-          # FUND_CODES: 您想要推送的基金代码，逗号分隔，例如 004253,110022
-          # APP_URL: 您部署后的网站地址，例如 https://fund-baby.vercel.app
-          
-          HOOK_URL="${{ secrets.FEISHU_HOOK_URL }}"
-          CODES="${{ secrets.FUND_CODES }}"
-          BASE_URL="${{ secrets.APP_URL }}"
-          
-          if [ -z "$HOOK_URL" ] || [ -z "$BASE_URL" ]; then
-            echo "Error: Missing required secrets (FEISHU_HOOK_URL or APP_URL)"
+          if [ -z "$FEISHU_HOOK_URL" ]; then
+            echo "Error: Missing required secret FEISHU_HOOK_URL"
             exit 1
           fi
-          
-          # If CODES is empty, the API will default to app/data/my-funds.json
-          curl -X POST "$BASE_URL/api/feishu-push" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n --arg hook "$HOOK_URL" --arg codes "$CODES" --arg title "养基小宝 - 定时推送" \
-                  '{hook: $hook, codes: (if $codes == "" then null else $codes end), title: $title}')"
+          node scripts/push.js
