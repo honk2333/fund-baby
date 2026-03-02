@@ -1,0 +1,24 @@
+{
+  "name": "fund-baby",
+  "version": "1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "dayjs": "^1.11.19",
+    "echarts": "^6.0.0",
+    "framer-motion": "^12.29.2",
+    "next": "^16.1.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "devDependencies": {
+    "babel-plugin-react-compiler": "^1.0.0"
+  }
+}
