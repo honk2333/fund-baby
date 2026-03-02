@@ -2,6 +2,21 @@
 import { NextResponse } from 'next/server';
 import { fetchServerFundData } from '../../lib/fund-server';
 import { sendFeishuMessage } from '../../lib/feishu';
+import fs from 'fs';
+import path from 'path';
+
+const getFileCodes = () => {
+    try {
+        const filePath = path.join(process.cwd(), 'app/data/my-funds.json');
+        if (fs.existsSync(filePath)) {
+            const content = fs.readFileSync(filePath, 'utf8');
+            return JSON.parse(content);
+        }
+    } catch (e) {
+        console.error('Failed to read funds from file', e);
+    }
+    return [];
+};
 
 export async function GET(request) {
     const { searchParams } = new URL(request.url);
@@ -9,15 +24,21 @@ export async function GET(request) {
     const hook = searchParams.get('hook');
     const title = searchParams.get('title') || '基金估值推送';
 
-    if (!codes) {
-        return NextResponse.json({ ok: false, message: "Missing fund codes" }, { status: 400 });
+    let codeList = [];
+    if (codes) {
+        codeList = codes.split(',');
+    } else {
+        codeList = getFileCodes();
+    }
+
+    if (codeList.length === 0) {
+        return NextResponse.json({ ok: false, message: "Missing fund codes and no default file config found" }, { status: 400 });
     }
 
     if (!hook) {
         return NextResponse.json({ ok: false, message: "Missing Feishu hook URL" }, { status: 400 });
     }
 
-    const codeList = codes.split(',');
     const results = [];
 
     for (const code of codeList) {
@@ -44,11 +65,21 @@ export async function POST(request) {
         const body = await request.json();
         const { codes, hook, title = '基金估值推送' } = body;
 
-        if (!codes || !hook) {
-            return NextResponse.json({ ok: false, message: "Missing required fields (codes, hook)" }, { status: 400 });
+        if (!hook) {
+            return NextResponse.json({ ok: false, message: "Missing Feishu hook URL" }, { status: 400 });
         }
 
-        const codeList = Array.isArray(codes) ? codes : codes.split(',');
+        let codeList = [];
+        if (codes) {
+            codeList = Array.isArray(codes) ? codes : codes.split(',');
+        } else {
+            codeList = getFileCodes();
+        }
+
+        if (codeList.length === 0) {
+            return NextResponse.json({ ok: false, message: "No fund codes provided" }, { status: 400 });
+        }
+
         const results = [];
 
         for (const code of codeList) {

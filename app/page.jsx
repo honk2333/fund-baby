@@ -1735,8 +1735,8 @@ export default function HomePage() {
 
   // 飞书推送配置
   const [feishuHook, setFeishuHook] = useState('https://open.feishu.cn/open-apis/bot/v2/hook/85cf858b-87a6-4877-b6a6-19c6a5061447');
-  const [hourlyPush, setHourlyPush] = useState(false);
-  const [dailyPush, setDailyPush] = useState(false);
+  const [hourlyPush, setHourlyPush] = useState(true);
+  const [dailyPush, setDailyPush] = useState(true);
   const lastHourlyPushRef = useRef(0);
   const lastDailyPushRef = useRef('');
 
@@ -2364,28 +2364,70 @@ export default function HomePage() {
     });
   };
 
+  const syncWithFileConfig = async (currentFunds) => {
+    try {
+      const res = await fetch('/api/config');
+      const fileCodes = await res.json();
+      if (!Array.isArray(fileCodes) || fileCodes.length === 0) return currentFunds;
+
+      const existingCodes = new Set(currentFunds.map(f => f.code));
+      const newCodes = fileCodes.filter(c => !existingCodes.has(c));
+
+      if (newCodes.length === 0) return currentFunds;
+
+      console.log('Adding new funds from file config:', newCodes);
+      const newFunds = [];
+      for (const code of newCodes) {
+        try {
+          const data = await fetchFundData(code);
+          newFunds.push(data);
+          fetchIntradayData(code).then(intra => {
+            if (intra) setIntradayMap(prev => ({ ...prev, [code]: intra }));
+          });
+        } catch (e) {
+          console.error(`Failed to load fund ${code} from file config`, e);
+        }
+      }
+
+      const updated = dedupeByCode([...newFunds, ...currentFunds]);
+      storageHelper.setItem('funds', JSON.stringify(updated));
+      return updated;
+    } catch (e) {
+      console.error('File sync failed', e);
+      return currentFunds;
+    }
+  };
+
   useEffect(() => {
     try {
       const rawFunds = localStorage.getItem('funds');
 
       if (rawFunds === null) {
-        // 首次访问，添加默认基金 004253 (信达澳银新能源产业股票)
-        const defaultCode = '004253';
-        fetchFundData(defaultCode).then(data => {
-          setFunds([data]);
-          storageHelper.setItem('funds', JSON.stringify([data]));
-          fetchIntradayData(defaultCode).then(intra => {
-            if (intra) setIntradayMap(prev => ({ ...prev, [defaultCode]: intra }));
-          });
-        }).catch(e => console.error('Default fund load failed', e));
+        // 首次访问，尝试从文件加载，如果文件也空则用默认
+        syncWithFileConfig([]).then(updated => {
+          if (updated.length > 0) {
+            setFunds(updated);
+          } else {
+            const defaultCode = '004253';
+            fetchFundData(defaultCode).then(data => {
+              setFunds([data]);
+              storageHelper.setItem('funds', JSON.stringify([data]));
+              fetchIntradayData(defaultCode).then(intra => {
+                if (intra) setIntradayMap(prev => ({ ...prev, [defaultCode]: intra }));
+              });
+            }).catch(e => console.error('Default fund load failed', e));
+          }
+        });
       } else {
         const saved = JSON.parse(rawFunds || '[]');
-        if (Array.isArray(saved) && saved.length) {
-          const deduped = dedupeByCode(saved);
-          setFunds(deduped);
-          storageHelper.setItem('funds', JSON.stringify(deduped));
-          const codes = Array.from(new Set(deduped.map((f) => f.code)));
-          if (codes.length) refreshAll(codes);
+        if (Array.isArray(saved)) {
+          // 常规加载后同步文件配置
+          syncWithFileConfig(saved).then(updated => {
+            const deduped = dedupeByCode(updated);
+            setFunds(deduped);
+            const codes = Array.from(new Set(deduped.map((f) => f.code)));
+            if (codes.length) refreshAll(codes);
+          });
         }
       }
 
@@ -2428,8 +2470,12 @@ export default function HomePage() {
       // 加载飞书配置
       const savedHook = localStorage.getItem('feishuHook');
       if (savedHook) setFeishuHook(savedHook);
-      setHourlyPush(localStorage.getItem('feishuHourlyPush') === 'true');
-      setDailyPush(localStorage.getItem('feishuDailyPush') === 'true');
+
+      const savedHourly = localStorage.getItem('feishuHourlyPush');
+      setHourlyPush(savedHourly === null ? true : savedHourly === 'true');
+
+      const savedDaily = localStorage.getItem('feishuDailyPush');
+      setDailyPush(savedDaily === null ? true : savedDaily === 'true');
     } catch { }
   }, []);
 
@@ -2457,9 +2503,19 @@ export default function HomePage() {
 
       // 1. 每小时推送
       if (hourlyPush) {
-        if (nowTs - lastHourlyPushRef.current > 3600000) {
-          await triggerFeishuPush('小时快讯');
-          lastHourlyPushRef.current = nowTs;
+        const hour = now.hour();
+        const minute = now.minute();
+        const day = now.day(); // 0 (Sun) to 6 (Sat)
+
+        // 交易日 (周一至周五) && 9:30 - 15:00
+        const isTradingDay = day >= 1 && day <= 5;
+        const isMarketTime = (hour > 9 || (hour === 9 && minute >= 30)) && (hour < 15 || (hour === 15 && minute === 0));
+
+        if (isTradingDay && isMarketTime) {
+          if (nowTs - lastHourlyPushRef.current > 3600000) {
+            await triggerFeishuPush('小时快讯');
+            lastHourlyPushRef.current = nowTs;
+          }
         }
       }
 
