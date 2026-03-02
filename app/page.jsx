@@ -2531,21 +2531,60 @@ export default function HomePage() {
     };
 
     const triggerFeishuPush = async (titleType = '快速推送') => {
-      const codes = Array.from(new Set(funds.map(f => f.code))).join(',');
-      if (!codes) return;
+      const codes = Array.from(new Set(funds.map(f => f.code)));
+      if (!codes.length || !feishuHook) return;
 
       try {
-        const res = await fetch('/api/feishu-push', {
+        const getPercentageColor = (val) => {
+          const num = parseFloat(val);
+          if (isNaN(num)) return "grey";
+          return num > 0 ? "red" : (num < 0 ? "green" : "grey");
+        };
+
+        const elements = [];
+        funds.forEach((f, index) => {
+          const rate = f.zzl !== undefined ? f.zzl : (parseFloat(f.gszzl) || 0);
+          const color = getPercentageColor(rate);
+          const ratingStr = rate > 0 ? `+${rate.toFixed(2)}%` : `${rate.toFixed(2)}%`;
+          const navVal = f.gsz || f.dwjz || '---';
+          const dateStr = f.gztime || f.jzrq || '---';
+
+          elements.push({
+            "tag": "div",
+            "text": {
+              "tag": "lark_md",
+              "content": `**${f.name}** (${f.code})\n**估值:** \`${navVal}\` | **涨跌幅:** **<font color='${color}'>${ratingStr}</font>**\n**时间:** ${dateStr}`
+            }
+          });
+
+          if (index < funds.length - 1) {
+            elements.push({ "tag": "hr" });
+          }
+        });
+
+        const body = {
+          "msg_type": "interactive",
+          "card": {
+            "config": { "wide_screen_mode": true },
+            "header": {
+              "title": { "tag": "plain_text", "content": `📈 养基小宝 - ${titleType}` },
+              "template": "blue"
+            },
+            "elements": [
+              ...elements,
+              { "tag": "hr" },
+              { "tag": "note", "elements": [{ "tag": "plain_text", "content": "由您的浏览器定时推送" }] }
+            ]
+          }
+        };
+
+        const res = await fetch(feishuHook, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            codes,
-            hook: feishuHook,
-            title: `养基小宝 - ${titleType}`
-          })
+          body: JSON.stringify(body)
         });
         const data = await res.json();
-        if (data.ok) {
+        if (data && (data.StatusCode === 0 || data.code === 0 || data.status_code === 0)) {
           console.log(`Feishu push success: ${titleType}`);
         }
       } catch (e) {
@@ -2565,31 +2604,72 @@ export default function HomePage() {
       showToast('请先输入飞书 Webhook 地址', 'error');
       return;
     }
-    const codes = Array.from(new Set(funds.map(f => f.code))).join(',');
-    if (!codes) {
+    const codes = Array.from(new Set(funds.map(f => f.code)));
+    if (!codes.length) {
       showToast('列表为空，无法推送', 'error');
       return;
     }
 
     try {
       showToast('正在发送测试推送...', 'info');
-      const res = await fetch('/api/feishu-push', {
+
+      const getPercentageColor = (val) => {
+        const num = parseFloat(val);
+        if (isNaN(num)) return "grey";
+        return num > 0 ? "red" : (num < 0 ? "green" : "grey");
+      };
+
+      const elements = [];
+      funds.forEach((f, index) => {
+        const rate = f.zzl !== undefined ? f.zzl : (parseFloat(f.gszzl) || 0);
+        const color = getPercentageColor(rate);
+        const ratingStr = rate > 0 ? `+${rate.toFixed(2)}%` : `${rate.toFixed(2)}%`;
+        const navVal = f.gsz || f.dwjz || '---';
+        const dateStr = f.gztime || f.jzrq || '---';
+
+        elements.push({
+          "tag": "div",
+          "text": {
+            "tag": "lark_md",
+            "content": `**${f.name}** (${f.code})\n**估值:** \`${navVal}\` | **涨跌幅:** **<font color='${color}'>${ratingStr}</font>**\n**时间:** ${dateStr}`
+          }
+        });
+
+        if (index < funds.length - 1) {
+          elements.push({ "tag": "hr" });
+        }
+      });
+
+      const body = {
+        "msg_type": "interactive",
+        "card": {
+          "config": { "wide_screen_mode": true },
+          "header": {
+            "title": { "tag": "plain_text", "content": `📈 养基小宝 - 手动测试推送` },
+            "template": "blue"
+          },
+          "elements": [
+            ...elements,
+            { "tag": "hr" },
+            { "tag": "note", "elements": [{ "tag": "plain_text", "content": "由浏览器直推 (测试)" }] }
+          ]
+        }
+      };
+
+      const res = await fetch(feishuHook, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          codes,
-          hook: feishuHook,
-          title: '养基小宝 - 手动测试推送'
-        })
+        body: JSON.stringify(body)
       });
       const data = await res.json();
-      if (data.ok) {
+      if (data && (data.StatusCode === 0 || data.code === 0 || data.status_code === 0)) {
         showToast('推送成功！请查看飞书消息', 'success');
       } else {
-        showToast(`推送失败: ${data.message || '未知错误'}`, 'error');
+        showToast(`推送失败检查控制台`, 'error');
+        console.error(data);
       }
     } catch (e) {
-      showToast('推送异常，请检查网络或 Hook 地址', 'error');
+      showToast('推送异常，可能遭遇跨域拦截', 'error');
     }
   };
 
