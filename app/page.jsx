@@ -1733,6 +1733,13 @@ export default function HomePage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tempSeconds, setTempSeconds] = useState(30);
 
+  // 飞书推送配置
+  const [feishuHook, setFeishuHook] = useState('https://open.feishu.cn/open-apis/bot/v2/hook/85cf858b-87a6-4877-b6a6-19c6a5061447');
+  const [hourlyPush, setHourlyPush] = useState(false);
+  const [dailyPush, setDailyPush] = useState(false);
+  const lastHourlyPushRef = useRef(0);
+  const lastDailyPushRef = useRef('');
+
   // 全局刷新状态
   const [refreshing, setRefreshing] = useState(false);
 
@@ -2412,13 +2419,17 @@ export default function HomePage() {
       if (savedHoldings && typeof savedHoldings === 'object') {
         setHoldings(savedHoldings);
       }
-      const savedViewMode = localStorage.getItem('viewMode');
-      // 默认为 card
       if (savedViewMode === 'list') {
         setViewMode('list');
       } else {
         setViewMode('card');
       }
+
+      // 加载飞书配置
+      const savedHook = localStorage.getItem('feishuHook');
+      if (savedHook) setFeishuHook(savedHook);
+      setHourlyPush(localStorage.getItem('feishuHourlyPush') === 'true');
+      setDailyPush(localStorage.getItem('feishuDailyPush') === 'true');
     } catch { }
   }, []);
 
@@ -2434,6 +2445,97 @@ export default function HomePage() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [funds, refreshMs]);
+
+  // 飞书推送逻辑 (浏览器端定时检查)
+  useEffect(() => {
+    if (!feishuHook || (!hourlyPush && !dailyPush)) return;
+
+    const checkAndPush = async () => {
+      const now = nowInTz();
+      const nowTs = now.valueOf();
+      const todayStr = now.format('YYYY-MM-DD');
+
+      // 1. 每小时推送
+      if (hourlyPush) {
+        if (nowTs - lastHourlyPushRef.current > 3600000) {
+          await triggerFeishuPush('小时快讯');
+          lastHourlyPushRef.current = nowTs;
+        }
+      }
+
+      // 2. 每日收盘推送 (15:00 - 15:30 之间且今天还没推过)
+      if (dailyPush) {
+        const hour = now.hour();
+        const minute = now.minute();
+        if (hour === 15 && minute >= 0 && minute <= 30 && lastDailyPushRef.current !== todayStr) {
+          await triggerFeishuPush('今日收盘快讯');
+          lastDailyPushRef.current = todayStr;
+        }
+      }
+    };
+
+    const triggerFeishuPush = async (titleType = '快速推送') => {
+      const codes = Array.from(new Set(funds.map(f => f.code))).join(',');
+      if (!codes) return;
+
+      try {
+        const res = await fetch('/api/feishu-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            codes,
+            hook: feishuHook,
+            title: `养基小宝 - ${titleType}`
+          })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          console.log(`Feishu push success: ${titleType}`);
+        }
+      } catch (e) {
+        console.error('Feishu automatic push failed', e);
+      }
+    };
+
+    // 每分钟检查一次
+    const feishuTimer = setInterval(checkAndPush, 60000);
+    checkAndPush(); // 立即检查一次
+
+    return () => clearInterval(feishuTimer);
+  }, [feishuHook, hourlyPush, dailyPush, funds]);
+
+  const handleTestFeishuPush = async () => {
+    if (!feishuHook) {
+      showToast('请先输入飞书 Webhook 地址', 'error');
+      return;
+    }
+    const codes = Array.from(new Set(funds.map(f => f.code))).join(',');
+    if (!codes) {
+      showToast('列表为空，无法推送', 'error');
+      return;
+    }
+
+    try {
+      showToast('正在发送测试推送...', 'info');
+      const res = await fetch('/api/feishu-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          codes,
+          hook: feishuHook,
+          title: '养基小宝 - 手动测试推送'
+        })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('推送成功！请查看飞书消息', 'success');
+      } else {
+        showToast(`推送失败: ${data.message || '未知错误'}`, 'error');
+      }
+    } catch (e) {
+      showToast('推送异常，请检查网络或 Hook 地址', 'error');
+    }
+  };
 
   const performSearch = async (val) => {
     if (!val.trim()) {
@@ -2688,6 +2790,12 @@ export default function HomePage() {
     const ms = Math.max(10, Number(tempSeconds)) * 1000;
     setRefreshMs(ms);
     storageHelper.setItem('refreshMs', String(ms));
+
+    // 保存飞书配置
+    storageHelper.setItem('feishuHook', feishuHook);
+    storageHelper.setItem('feishuHourlyPush', String(hourlyPush));
+    storageHelper.setItem('feishuDailyPush', String(dailyPush));
+
     setSettingsOpen(false);
   };
 
@@ -3996,6 +4104,45 @@ export default function HomePage() {
                     最小 10 秒
                   </div>
                 )}
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 16 }}>
+                <div className="muted" style={{ marginBottom: 8, fontSize: '0.8rem' }}>飞书推送配置 (Feishu Webhook)</div>
+                <input
+                  className="input"
+                  type="text"
+                  value={feishuHook}
+                  onChange={(e) => setFeishuHook(e.target.value)}
+                  placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
+                  style={{ marginBottom: 12, width: '100%' }}
+                />
+                <div className="row" style={{ gap: 16, marginBottom: 12 }}>
+                  <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', cursor: 'pointer', color: 'var(--text)' }}>
+                    <input
+                      type="checkbox"
+                      checked={hourlyPush}
+                      onChange={(e) => setHourlyPush(e.target.checked)}
+                    />
+                    每一小时推送
+                  </label>
+                  <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8rem', cursor: 'pointer', color: 'var(--text)' }}>
+                    <input
+                      type="checkbox"
+                      checked={dailyPush}
+                      onChange={(e) => setDailyPush(e.target.checked)}
+                    />
+                    每日 15:00 收盘推送
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={handleTestFeishuPush}
+                  disabled={!feishuHook}
+                  style={{ width: '100%', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)' }}
+                >
+                  测试推送一次
+                </button>
               </div>
 
               <div className="form-group" style={{ marginBottom: 16 }}>

@@ -1,0 +1,33 @@
+name: Feishu Fund Push
+
+on:
+  schedule:
+    # 每一小时推送 (UTC 时间)
+    - cron: '0 * * * *'
+    # 每日 15:05 推送 (UTC 7:05)
+    - cron: '5 7 * * *'
+  workflow_dispatch: # 支持手动触发
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Feishu Push
+        run: |
+          # 请在 GitHub Repo Settings -> Secrets and variables -> Actions 中配置以下变量:
+          # FEISHU_HOOK_URL: 您的飞书 Webhook 地址
+          # FUND_CODES: 您想要推送的基金代码，逗号分隔，例如 004253,110022
+          # APP_URL: 您部署后的网站地址，例如 https://fund-baby.vercel.app
+          
+          HOOK_URL="${{ secrets.FEISHU_HOOK_URL }}"
+          CODES="${{ secrets.FUND_CODES }}"
+          BASE_URL="${{ secrets.APP_URL }}"
+          
+          if [ -z "$HOOK_URL" ] || [ -z "$CODES" ] || [ -z "$BASE_URL" ]; then
+            echo "Error: Missing required secrets (FEISHU_HOOK_URL, FUND_CODES, or APP_URL)"
+            exit 1
+          fi
+          
+          curl -X POST "$BASE_URL/api/feishu-push" \
+            -H "Content-Type: application/json" \
+            -d "{\"codes\": \"$CODES\", \"hook\": \"$HOOK_URL\", \"title\": \"养基小宝 - 定时推送\"}"
