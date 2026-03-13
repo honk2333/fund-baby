@@ -9,6 +9,12 @@ dayjs.tz.setDefault('Asia/Shanghai');
 const TZ = 'Asia/Shanghai';
 const nowInTz = () => dayjs().tz(TZ);
 const toTz = (input) => (input ? dayjs.tz(input, TZ) : nowInTz());
+const isTradingSession = (time = nowInTz()) => {
+  const day = time.day();
+  if (day < 1 || day > 5) return false;
+  const minutes = time.hour() * 60 + time.minute();
+  return minutes >= 9 * 60 + 30 && minutes <= 15 * 60 + 10;
+};
 
 export const loadScript = (url) => {
   return new Promise((resolve, reject) => {
@@ -153,6 +159,47 @@ export const fetchFundDataFallback = async (c) => {
   });
 };
 
+const fetchTencentIntradaySnapshot = async (code) => {
+  try {
+    const url = `https://web.ifzq.gtimg.cn/fund/newfund/fundSsgz/getSsgz?app=web&symbol=jj${code}&_=${Date.now()}`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+
+    const result = await response.json();
+    if (!(result.code === 0 && result.data && Array.isArray(result.data.data))) {
+      return null;
+    }
+
+    const yDwjz = parseFloat(result.data.yesterdayDwjz);
+    if (!Number.isFinite(yDwjz) || yDwjz <= 0) return null;
+
+    const points = result.data.data
+      .map((item) => {
+        const timeStr = String(item?.[0] || '');
+        const value = Number(item?.[1]);
+        if (!/^\d{4}$/.test(timeStr) || !Number.isFinite(value)) return null;
+        const formattedTime = `${timeStr.slice(0, 2)}:${timeStr.slice(2)}`;
+        const growth = Number((((value - yDwjz) / yDwjz) * 100).toFixed(2));
+        return {
+          time: formattedTime,
+          value,
+          growth
+        };
+      })
+      .filter(Boolean);
+
+    if (!points.length) return null;
+
+    return {
+      yesterdayDwjz: yDwjz,
+      points,
+      latest: points[points.length - 1]
+    };
+  } catch (e) {
+    return null;
+  }
+};
+
 export const fetchFundData = async (c) => {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     throw new Error('无浏览器环境');
@@ -178,6 +225,7 @@ export const fetchFundData = async (c) => {
         jzrq: json.jzrq,
         gszzl: Number.isFinite(gszzlNum) ? gszzlNum : json.gszzl
       };
+      const intradayPromise = fetchTencentIntradaySnapshot(c);
       const tencentPromise = new Promise((resolveT) => {
         const tUrl = `https://qt.gtimg.cn/q=jj${c}`;
         const tScript = document.createElement('script');
@@ -340,7 +388,7 @@ export const fetchFundData = async (c) => {
         }
       });
 
-      Promise.all([tencentPromise, holdingsPromise, trendPromise]).then(([tData, holdings, trendData]) => {
+      Promise.all([tencentPromise, holdingsPromise, trendPromise, intradayPromise]).then(([tData, holdings, trendData, intradayData]) => {
         if (tData) {
           if (tData.jzrq && (!gzData.jzrq || tData.jzrq >= gzData.jzrq)) {
             gzData.dwjz = tData.dwjz;
@@ -348,6 +396,54 @@ export const fetchFundData = async (c) => {
             gzData.zzl = tData.zzl;
           }
         }
+
+        const now = nowInTz();
+        const todayStr = now.format('YYYY-MM-DD');
+        const officialValuationFresh = typeof gzData.gztime === 'string' && gzData.gztime.startsWith(todayStr);
+        const intradayFresh = Boolean(intradayData?.latest) && isTradingSession(now);
+
+        if (intradayFresh) {
+          gzData.gsz = intradayData.latest.value;
+          gzData.gszzl = intradayData.latest.growth;
+          gzData.gztime = `${todayStr} ${intradayData.latest.time}`;
+          gzData.time = gzData.gztime;
+          gzData.valuationSource = 'tencent_intraday';
+        } else {
+          gzData.time = gzData.gztime || gzData.jzrq || '';
+          gzData.valuationSource = officialValuationFresh ? 'eastmoney' : 'last_close';
+        }
+
+        const baseNav = Number(gzData.dwjz);
+        const pricedHoldings = (holdings || [])
+          .map((holding) => {
+            const weight = Number(String(holding?.weight || '').replace('%', ''));
+            const change = Number(holding?.change);
+            if (!Number.isFinite(weight) || weight <= 0 || !Number.isFinite(change)) {
+              return null;
+            }
+            return { weight, change };
+          })
+          .filter(Boolean);
+
+        const coveredWeight = pricedHoldings.reduce((sum, item) => sum + item.weight, 0);
+        if (Number.isFinite(baseNav) && baseNav > 0 && coveredWeight > 0) {
+          const estimatedRate = pricedHoldings.reduce((sum, item) => {
+            return sum + (item.weight * item.change);
+          }, 0) / 100;
+
+          gzData.estPricedCoverage = coveredWeight / 100;
+          gzData.estGszzl = Number(estimatedRate.toFixed(2));
+          gzData.estGsz = Number((baseNav * (1 + estimatedRate / 100)).toFixed(4));
+          gzData.estTime = intradayFresh
+            ? `${todayStr} ${intradayData.latest.time}`
+            : (officialValuationFresh ? gzData.gztime : now.format('YYYY-MM-DD HH:mm'));
+        } else {
+          gzData.estPricedCoverage = 0;
+          gzData.estGszzl = null;
+          gzData.estGsz = null;
+          gzData.estTime = null;
+        }
+
         const { historyTrend, yesterdayChange } = trendData || {};
         resolve({ ...gzData, holdings, historyTrend, yesterdayChange });
       });
@@ -443,37 +539,8 @@ export const fetchLatestRelease = async () => {
 
 export const fetchIntradayData = async (code) => {
   try {
-    // 使用腾讯财经接口，支持 CORS，无需后端代理
-    const url = `https://web.ifzq.gtimg.cn/fund/newfund/fundSsgz/getSsgz?app=web&symbol=jj${code}&_=${Date.now()}`;
-    const response = await fetch(url);
-    if (!response.ok) return null;
-
-    const result = await response.json();
-    if (result.code === 0 && result.data && Array.isArray(result.data.data)) {
-      const { data: list, yesterdayDwjz } = result.data;
-      const yDwjz = parseFloat(yesterdayDwjz);
-
-      if (!yDwjz) return null;
-
-      return list.map(item => {
-        // item: ["0930", 1.1846, -0.0036] (时间, 估值, 涨跌额)
-        const timeStr = item[0];
-        const value = Number(item[1]);
-
-        // 格式化时间 "0930" -> "09:30"
-        const formattedTime = `${timeStr.slice(0, 2)}:${timeStr.slice(2)}`;
-
-        // 计算涨跌幅
-        const growth = ((value - yDwjz) / yDwjz * 100).toFixed(2);
-
-        return {
-          time: formattedTime,
-          value: value,
-          growth: growth
-        };
-      });
-    }
-    return null;
+    const snapshot = await fetchTencentIntradaySnapshot(code);
+    return snapshot?.points || null;
   } catch (e) {
     console.error('获取分时数据失败', code, e);
     return null;

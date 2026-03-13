@@ -1916,15 +1916,38 @@ export default function HomePage() {
     return () => clearInterval(timer);
   }, []);
 
+  const getFundValuationMeta = (fund) => {
+    const hasTodayData = fund?.jzrq === todayStr;
+    const hasTodayValuation = typeof fund?.gztime === 'string' && fund.gztime.startsWith(todayStr);
+    const hasEstimatedValuation = Number(fund?.estPricedCoverage) > 0.05
+      && Number.isFinite(Number(fund?.estGsz))
+      && Number.isFinite(Number(fund?.estGszzl));
+    const valuationTime = fund?.noValuation
+      ? (fund?.jzrq || '-')
+      : (hasEstimatedValuation && !hasTodayValuation
+        ? (fund?.estTime || fund?.gztime || fund?.time || '-')
+        : (fund?.gztime || fund?.time || fund?.jzrq || '-'));
+    const valuationLabel = fund?.noValuation
+      ? '净值日期'
+      : (hasEstimatedValuation && !hasTodayValuation ? '估算时间' : '估值时间');
+
+    return {
+      hasTodayData,
+      hasTodayValuation,
+      hasEstimatedValuation,
+      valuationTime,
+      valuationLabel
+    };
+  };
+
   // 计算持仓收益
   const getHoldingProfit = (fund, holding) => {
     if (!holding || typeof holding.share !== 'number') return null;
 
     const now = nowInTz();
     const isAfter9 = now.hour() >= 9;
-    const hasTodayData = fund.jzrq === todayStr;
-    const hasTodayValuation = typeof fund.gztime === 'string' && fund.gztime.startsWith(todayStr);
-    const canCalcTodayProfit = hasTodayData || hasTodayValuation;
+    const { hasTodayData, hasTodayValuation, hasEstimatedValuation } = getFundValuationMeta(fund);
+    const canCalcTodayProfit = hasTodayData || hasTodayValuation || hasEstimatedValuation;
 
     // 如果是交易日且9点以后，且今日净值未出，则强制使用估值（隐藏涨跌幅列模式）
     const useValuation = isTradingDay && isAfter9 && !hasTodayData;
@@ -3650,7 +3673,7 @@ export default function HomePage() {
                                         <span className="update-badge" title="今日净值已更新">✓</span>
                                       )}
                                     </div>
-                                    <span className="muted code-text">#{f.code} · {(f.noValuation ? (f.jzrq || '-') : (f.gztime || f.time || '-')).replace(/^\d{4}-/, '')}</span>
+                                    <span className="muted code-text">#{f.code} · {getFundValuationMeta(f).valuationTime.replace(/^\d{4}-/, '')}</span>
                                   </div>
                                 </div>
                                 {(() => {
@@ -3658,6 +3681,7 @@ export default function HomePage() {
                                   const isAfter9 = now.hour() >= 9;
                                   const hasTodayData = f.jzrq === todayStr;
                                   const shouldHideChange = isTradingDay && isAfter9 && !hasTodayData;
+                                  const valuationMeta = getFundValuationMeta(f);
 
                                   if (!shouldHideChange) {
                                     // 显示真实数据
@@ -3686,9 +3710,17 @@ export default function HomePage() {
                                       );
                                     }
                                     // 估值
-                                    const estValue = f.estPricedCoverage > 0.05 ? f.estGsz.toFixed(4) : (f.gsz ?? '—');
-                                    const estChange = f.estPricedCoverage > 0.05 ? f.estGszzl : (Number(f.gszzl) || 0);
-                                    const estChangeText = f.estPricedCoverage > 0.05 ? `${f.estGszzl > 0 ? '+' : ''}${f.estGszzl.toFixed(2)}%` : (typeof f.gszzl === 'number' ? `${f.gszzl > 0 ? '+' : ''}${f.gszzl.toFixed(2)}%` : f.gszzl ?? '—');
+                                    const estValue = valuationMeta.hasEstimatedValuation
+                                      ? Number(f.estGsz).toFixed(4)
+                                      : (valuationMeta.hasTodayValuation ? (f.gsz ?? '—') : '—');
+                                    const estChange = valuationMeta.hasEstimatedValuation
+                                      ? Number(f.estGszzl)
+                                      : (valuationMeta.hasTodayValuation ? (Number(f.gszzl) || 0) : null);
+                                    const estChangeText = valuationMeta.hasEstimatedValuation
+                                      ? `${f.estGszzl > 0 ? '+' : ''}${Number(f.estGszzl).toFixed(2)}%`
+                                      : (valuationMeta.hasTodayValuation
+                                        ? (typeof f.gszzl === 'number' ? `${f.gszzl > 0 ? '+' : ''}${f.gszzl.toFixed(2)}%` : f.gszzl ?? '—')
+                                        : '—');
 
                                     return (
                                       <div className="table-cell text-right change-cell">
@@ -3848,8 +3880,8 @@ export default function HomePage() {
 
                                   <div className="actions">
                                     <div className="badge-v">
-                                      <span>{f.noValuation ? '净值日期' : '估值时间'}</span>
-                                      <strong>{(f.noValuation ? (f.jzrq || '-') : (f.gztime || f.time || '-')).replace(/^\d{4}-/, '')}</strong>
+                                      <span>{getFundValuationMeta(f).valuationLabel}</span>
+                                      <strong>{getFundValuationMeta(f).valuationTime.replace(/^\d{4}-/, '')}</strong>
                                     </div>
                                     <div className="row" style={{ gap: 4 }}>
                                       <button
@@ -3869,6 +3901,7 @@ export default function HomePage() {
                                   {(() => {
                                     const holding = holdings[f.code];
                                     const profit = getHoldingProfit(f, holding);
+                                    const valuationMeta = getFundValuationMeta(f);
                                     const hasTodayData = f.jzrq === todayStr;
                                     // 优先显示实际：如果已更新(hasTodayData) 或 无估值(noValuation)
                                     const showActual = hasTodayData || f.noValuation;
@@ -3879,17 +3912,25 @@ export default function HomePage() {
                                         value={
                                           showActual
                                             ? (f.zzl !== undefined ? `${f.zzl > 0 ? '+' : ''}${Number(f.zzl).toFixed(2)}%` : '—')
-                                            : (f.estPricedCoverage > 0.05 ? `${f.estGszzl > 0 ? '+' : ''}${f.estGszzl.toFixed(2)}%` : (typeof f.gszzl === 'number' ? `${f.gszzl > 0 ? '+' : ''}${f.gszzl.toFixed(2)}%` : f.gszzl ?? '—'))
+                                            : (valuationMeta.hasEstimatedValuation
+                                              ? `${f.estGszzl > 0 ? '+' : ''}${Number(f.estGszzl).toFixed(2)}%`
+                                              : (valuationMeta.hasTodayValuation
+                                                ? (typeof f.gszzl === 'number' ? `${f.gszzl > 0 ? '+' : ''}${f.gszzl.toFixed(2)}%` : f.gszzl ?? '—')
+                                                : '—'))
                                         }
                                         delta={
                                           showActual
                                             ? f.zzl
-                                            : (f.estPricedCoverage > 0.05 ? f.estGszzl : (Number(f.gszzl) || 0))
+                                            : (valuationMeta.hasEstimatedValuation
+                                              ? f.estGszzl
+                                              : (valuationMeta.hasTodayValuation ? (Number(f.gszzl) || 0) : null))
                                         }
                                         subValue={
                                           showActual
                                             ? f.dwjz
-                                            : (f.estPricedCoverage > 0.05 ? f.estGsz.toFixed(4) : (f.gsz ?? '—'))
+                                            : (valuationMeta.hasEstimatedValuation
+                                              ? Number(f.estGsz).toFixed(4)
+                                              : (valuationMeta.hasTodayValuation ? (f.gsz ?? '—') : '—'))
                                         }
                                       />
                                     );
